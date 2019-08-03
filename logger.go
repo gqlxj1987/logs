@@ -573,7 +573,6 @@ func (l *Logger) fmtLog(ctx context.Context, level int, fileLocation string, raw
 	if atomic.LoadInt32(&l.isRunning) == 0 {
 		return
 	}
-	doMetrics(level, l.PSM)
 
 	kvList := GetAllKVs(ctx)
 	if kvList != nil {

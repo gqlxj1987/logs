@@ -9,3 +9,15 @@ func Cluster() string {
 func HostIP() string {
 	return "0.0.0.0"
 }
+
+func Stage() string {
+	return ""
+}
+
+func PSM() string {
+	return ""
+}
+
+func PodName() string {
+	return ""
+}
