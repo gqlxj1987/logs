@@ -50,14 +50,21 @@ const (
 	NoDur   SegDuration = "No"
 )
 
+const (
+	FilePageCacheSize int64 = 16 * 1024 * 1024
+	FullPageCacheSize int64 = FilePageCacheSize * 16
+)
+
 type FileProvider struct {
 	sync.Mutex
 	enableRotate bool
 	hourTicker   <-chan time.Time
 
-	fd       *os.File
-	filename string
-	level    int
+	fd         *os.File
+	filename   string
+	level      int
+	fadvOffset int64
+	writeSize  int64
 }
 
 // NOTE(xiangchao): 由于基于size大小的切割方案可能会导致切割出来的文件在命名上存在一些问题，因此这里废弃基于size大小的切割方案
@@ -97,6 +104,13 @@ func (fp *FileProvider) Init() error {
 		os.Remove(fp.filename)
 	}
 	os.Symlink("./"+filepath.Base(realFile), fp.filename)
+	pos, err := fd.Seek(0, os.SEEK_CUR)
+	if err != nil {
+		fp.fadvOffset = -1
+	} else {
+		fp.fadvOffset = pos / FilePageCacheSize * FilePageCacheSize
+		fp.writeSize = pos % FilePageCacheSize
+	}
 	return nil
 }
 
@@ -129,11 +143,27 @@ func (fp *FileProvider) WriteMsg(msg string, level int) error {
 	}
 	// NOTE(xiangchao): 按照size切割已经被忽略
 	fp.doCheck()
-	_, err := fmt.Fprint(fp.fd, msg)
+	written, err := fmt.Fprint(fp.fd, msg)
+	if (err == nil) && (fp.fadvOffset >= 0) {
+		fp.writeSize += int64(written)
+		if fp.writeSize >= FilePageCacheSize {
+			go func(fd int, offset int64, length int64) {
+				TryToDropFilePageCache(fd, offset, length)
+				/* full drop page cache every FullPageCacheSize */
+				if ((offset + FilePageCacheSize) % FullPageCacheSize) <= FilePageCacheSize {
+					TryToDropFilePageCache(int(fp.fd.Fd()), 0, fp.fadvOffset)
+				}
+			}(int(fp.fd.Fd()), fp.fadvOffset, FilePageCacheSize)
+
+			fp.fadvOffset += FilePageCacheSize
+			fp.writeSize -= FilePageCacheSize
+		}
+	}
 	return err
 }
 
 func (fp *FileProvider) Destroy() error {
+	TryToDropFilePageCache(int(fp.fd.Fd()), 0, fp.fadvOffset+FilePageCacheSize)
 	return fp.fd.Close()
 }
 
